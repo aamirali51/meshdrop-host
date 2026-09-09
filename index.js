@@ -37,6 +37,10 @@ const LOCK_FILE = 'host.lock'
 const TOKEN_FILE = 'api-token'
 const HOST_INFO_FILE = 'host.json'
 
+// Phase 2: built renderer UI served by default from the app repo; `--ui` can
+// point elsewhere. The page loads unauthenticated; the session rides ?t=.
+const DEFAULT_UI_DIR = path.join(__dirname, '..', 'meshdrop-app', 'renderer', 'dist')
+
 // The host re-homes the Electron local servers (Phase 1b): stream/DAV server
 // and the sites gateway run in-process against THIS engine, token-gated with
 // the SAME api-token the HTTP API uses. Default ports match the Electron
@@ -73,14 +77,21 @@ function parseArgv(argv) {
     else if (arg.startsWith('--downloads=')) flags.downloads = arg.slice('--downloads='.length)
     else if (arg === '--maxImportBytes') flags.maxImportBytes = Number(argv[++i])
     else if (arg.startsWith('--maxImportBytes=')) flags.maxImportBytes = Number(arg.slice('--maxImportBytes='.length))
+    else if (arg === '--ui') {
+      // Optional value: --ui [dir]; a bare --ui uses the default dist dir.
+      const next = argv[i + 1]
+      flags.ui = next && !next.startsWith('--') ? argv[++i] : DEFAULT_UI_DIR
+    } else if (arg.startsWith('--ui=')) flags.ui = arg.slice('--ui='.length)
     else if (arg === '--dev') flags.dev = true
     else if (arg === '--help' || arg === '-h') {
       console.log(
-        'Usage: node index.js [--storage <dir>] [--port <n>] [--downloads <dir>] [--maxImportBytes <n>] [--dev]\n' +
+        'Usage: node index.js [--storage <dir>] [--port <n>] [--downloads <dir>] [--maxImportBytes <n>] [--ui [dir]] [--dev]\n' +
           '  --storage          engine + token store (env MESHDROP_HOST_STORAGE, default ~/.meshdrop-host)\n' +
           '  --port             API port (env MESHDROP_HOST_PORT, default 41990; +1 on EADDRINUSE)\n' +
           '  --downloads        received-file folder (env MESHDROP_HOST_DOWNLOADS, default ~/Downloads)\n' +
           `  --maxImportBytes   POST /import cap in bytes (default ${DEFAULT_MAX_IMPORT_BYTES})\n` +
+          '  --ui [dir]         serve the built renderer UI from this same server\n' +
+          '                     (default meshdrop-app/renderer/dist; disabled if missing)\n' +
           '  --dev              allow CORS from the Vite dev server (http://localhost:5173) only'
       )
       process.exit(0)
@@ -104,6 +115,7 @@ function resolveConfig(flags) {
       ? flags.maxImportBytes
       : DEFAULT_MAX_IMPORT_BYTES,
     dev: flags.dev,
+    uiDir: flags.ui ? path.resolve(flags.ui) : null,
     label: path.basename(path.resolve(storageDir)) || 'host'
   }
 }
@@ -171,6 +183,14 @@ function createHostApp(cfg) {
   // exactly as each Electron server mints its own token for the app.
   const tokenPath = path.join(cfg.storageDir, TOKEN_FILE)
   const token = loadOrCreateToken(tokenPath)
+
+  // Step 3: the CLI default points at meshdrop-app/renderer/dist, which may not
+  // exist in dev checkouts — serve UI only when the dir really holds index.html.
+  let uiDir = null
+  if (cfg.uiDir) {
+    if (fs.existsSync(path.join(cfg.uiDir, 'index.html'))) uiDir = cfg.uiDir
+    else warn(`UI dir ${cfg.uiDir} has no index.html — serving API only`)
+  }
 
   const engine = new MeshEngine({
     storageDir: cfg.storageDir,
@@ -317,7 +337,8 @@ function createHostApp(cfg) {
         waitEngineReady: () => start(),
         getVersionInfo,
         basePort: cfg.port,
-        dev: cfg.dev
+        dev: cfg.dev,
+        ui: uiDir ? { dir: uiDir } : null
       })
       const port = await apiServer.listen()
       apiServer.attachWebSocket()
@@ -347,6 +368,7 @@ function createHostApp(cfg) {
         identity: { ...engine.deviceIdentity, pairingCode: identity.pairingCode }
       })
       log(`API listening on http://127.0.0.1:${port} (token file: ${path.resolve(tokenPath)})`)
+      if (uiDir) log(`UI ready: http://127.0.0.1:${port}/?t=${token}`)
       sampleDiagnostics(true)
       return { port }
     })().catch((err) => {

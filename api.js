@@ -119,9 +119,71 @@ function json(res, status, obj, extraHeaders) {
   res.end(body)
 }
 
+// ─── Static UI (Phase 2, --ui) ─────────────────────────────────────────────
+// The renderer's built page is served from the SAME origin/port as the API.
+// Assets are deliberately unauthenticated: the session token rides in the
+// LAUNCH URL as ?t= and is consumed by page JS, while every API path below
+// keeps its header/?t token gate untouched. Served files are resolved under
+// uiDir only (realpath containment — no traversal, no directory listing),
+// with correct MIME types.
+
+const UI_MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.txt': 'text/plain; charset=utf-8'
+}
+
+function uiContentType(filePath) {
+  return UI_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
+}
+
+/**
+ * Serves one UI asset. Returns:
+ *   { served: true }  — response written
+ *   { served: false, handled: false } — path is not a UI asset; caller
+ *     continues with normal API dispatch (token-gated).
+ * Never lists directories, never serves outside uiDir.
+ */
+async function serveUiAsset(uiDir, pathname) {
+  let rel = ''
+  try {
+    rel = decodeURIComponent(pathname).replace(/\\/g, '/')
+  } catch {
+    return { served: false, handled: false }
+  }
+  if (!rel.startsWith('/') || rel.includes('\0')) return { served: false, handled: false }
+  if (rel === '/') rel = '/index.html'
+  const target = path.resolve(uiDir, '.' + rel)
+  const realDir = await fs.promises.realpath(uiDir).catch(() => null)
+  const realTarget = await fs.promises.realpath(target).catch(() => null)
+  if (!realDir || !realTarget) return { served: false, handled: false }
+  if (realTarget !== realDir && !realTarget.startsWith(realDir + path.sep)) {
+    return { served: false, handled: false }
+  }
+  const st = await fs.promises.stat(realTarget).catch(() => null)
+  if (!st || !st.isFile()) return { served: false, handled: false }
+  const isIndex = rel === '/index.html'
+  return { served: true, filePath: realTarget, stat: st, isIndex }
+}
+
 // ─── Server ────────────────────────────────────────────────────────────────
 // opts: { tokenPath, storageDir, getEngine, waitEngineReady, handlers,
-//         broadcaster, getExcludedInfo, bridge, basePort, dev, log }
+//         broadcaster, getExcludedInfo, bridge, basePort, dev, log,
+//         ui: { dir } | null }
 async function createApiServer(opts) {
   const token = loadOrCreateToken(opts.tokenPath)
   const dev = !!opts.dev
@@ -169,6 +231,26 @@ async function createApiServer(opts) {
       if (url.pathname === '/health') {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' }, extra)
         return json(res, 200, { ok: true }, extra)
+      }
+
+      // Phase 2 UI: same-origin static page (unauthenticated by design — the
+      // session token reaches the page through the launch URL's ?t=). Only
+      // files that exist under uiDir are served; API paths fall through to
+      // the token-gated dispatch below.
+      if (opts.ui && req.method === 'GET') {
+        const hit = await serveUiAsset(opts.ui.dir, url.pathname)
+        if (hit.served) {
+          const ct = uiContentType(hit.filePath)
+          const cache = hit.isIndex ? 'no-cache' : 'public, max-age=300'
+          res.writeHead(200, {
+            'Content-Type': ct,
+            'Content-Length': hit.stat.size,
+            'Cache-Control': cache,
+            'X-Content-Type-Options': 'nosniff'
+          })
+          fs.createReadStream(hit.filePath).pipe(res)
+          return
+        }
       }
 
       // Everything below is token-gated; the browser cannot attach headers to

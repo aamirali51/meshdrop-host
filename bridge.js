@@ -2,8 +2,8 @@
 
 // Browser-bridge endpoints (Phase 1b). A browser launcher talks to the host
 // through the API server, but HTTP fetch from a page cannot do WebDAV verbs or
-// open the IPC RPC surface usefully — these four routes give it the two
-// things it needs:
+// open the IPC RPC surface usefully — these routes give it the few native
+// things the page needs:
 //
 //   POST /import?name=<filename>&size=<bytes>
 //       Streams the raw request body into <storageDir>/p2p-temp/import--<name>
@@ -19,6 +19,12 @@
 //   GET  /fs/list?path=<abs>   — DIRECT subdirectory names of an absolute
 //                                directory path (400 if a file, 404 if missing),
 //                                names + absolute child paths only.
+//   GET  /fs/pick[?path=<abs>] — open the OS-native folder dialog ON THE HOST
+//                                MACHINE and resolve { path } (absolute) or
+//                                null when cancelled. The API is loopback-only,
+//                                so the chooser sits at the host. Non-Windows
+//                                hosts return 501 and the renderer falls back
+//                                to the /fs/drives + /fs/list browser modal.
 //
 // Absolute-path browsing is safe behind the existing gates: the token-gated
 // API already accepts arbitrary absolute paths from any token-holder
@@ -31,6 +37,7 @@
 const fs = require('fs')
 const fsp = fs.promises
 const path = require('path')
+const os = require('os')
 const { execFile } = require('child_process')
 
 const DEFAULT_MAX_IMPORT_BYTES = 500 * 1024 * 1024
@@ -296,6 +303,58 @@ async function handleFsList(ctx, req, res, url) {
   json(res, 200, { path: target, entries })
 }
 
+// A folder dialog can legitimately stay open for a while; anything beyond this
+// is treated as cancelled (the dialog was killed/never usable).
+const FS_PICK_TIMEOUT_MS = 10 * 60 * 1000
+
+async function handleFsPick(ctx, req, res, url) {
+  if (process.platform !== 'win32') {
+    return json(res, 501, { error: 'native folder picker is only available on Windows hosts' })
+  }
+  // Optional start location (must already exist — FolderBrowserDialog cannot
+  // select a directory that isn't there).
+  let initial = (url.searchParams.get('path') || '').trim()
+  if (initial) {
+    const ok = await fsp.stat(initial).then((st) => st.isDirectory()).catch(() => false)
+    if (!ok) initial = ''
+  }
+  // Windows PowerShell 5.1 ships with every supported Windows and is already
+  // used for the /fs/drives label probe. -STA is required for WinForms; the
+  // choice is written to a temp file as UTF-8 because console redirection
+  // would mangle non-ASCII paths (both paths are single-quoted PS literals —
+  // embedded quotes are escaped by doubling).
+  const outFile = path.join(os.tmpdir(), `meshdrop-fs-pick-${process.pid}-${Date.now()}.txt`)
+  const psSingle = (s) => `'${String(s).replace(/'/g, "''")}'`
+  const script = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
+    "$d.Description = 'Choose a folder for MeshDrop'",
+    '$d.ShowNewFolderButton = $true',
+    ...(initial ? [`$d.SelectedPath = ${psSingle(initial)}`] : []),
+    'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {',
+    `  [System.IO.File]::WriteAllText(${psSingle(outFile)}, $d.SelectedPath, [System.Text.Encoding]::UTF8)`,
+    '}'
+  ].join('; ')
+
+  const err = await new Promise((resolve) => {
+    execFile('powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-STA', '-Command', script],
+      { timeout: FS_PICK_TIMEOUT_MS, windowsHide: true, maxBuffer: 1 << 20 },
+      (e) => resolve(e))
+  })
+  if (err && err.code !== 'ETIMEDOUT') {
+    // powershell missing or died before the dialog was usable — the renderer
+    // keeps its in-app browser fallback for this case.
+    return json(res, 500, { error: 'could not start the native folder picker' })
+  }
+  let picked = null
+  try {
+    if (fs.existsSync(outFile)) picked = fs.readFileSync(outFile, 'utf8').trim() || null
+  } catch {}
+  try { fs.unlinkSync(outFile) } catch {}
+  json(res, 200, { path: picked })
+}
+
 function createBridgeHandlers(opts = {}) {
   const ctx = {
     storageDir: opts.storageDir,
@@ -308,7 +367,8 @@ function createBridgeHandlers(opts = {}) {
     { path: '/import', method: 'POST', handler: (req, res, url) => handleImport(ctx, req, res, url) },
     { path: '/files/download', method: 'GET', handler: (req, res, url) => handleDownload(ctx, req, res, url) },
     { path: '/fs/drives', method: 'GET', handler: (req, res, url) => handleFsDrives(ctx, req, res, url) },
-    { path: '/fs/list', method: 'GET', handler: (req, res, url) => handleFsList(ctx, req, res, url) }
+    { path: '/fs/list', method: 'GET', handler: (req, res, url) => handleFsList(ctx, req, res, url) },
+    { path: '/fs/pick', method: 'GET', handler: (req, res, url) => handleFsPick(ctx, req, res, url) }
   ]
 }
 
