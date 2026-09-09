@@ -528,6 +528,36 @@ async function partD() {
     check('D: /fs/list missing/empty path param → 400', noPath.status === 400, `http ${noPath.status}`)
     const relL = await rawRequest(A.port, A.token, 'GET', '/fs/list?path=p2p-temp')
     check('D: /fs/list relative path → 400 (absolute required)', relL.status === 400, `http ${relL.status}`)
+
+    // ─── Part E: no unauthenticated route ever returns the session token ───
+    // Round-2 regression: every candidate route is probed with NO token and
+    // with a WRONG token. Anything a UI could read to bootstrap a session —
+    // /token, /api/token, /session — plus every real endpoint must refuse
+    // (403 via the api.js gate; the only unauthenticated 200s are /health and
+    // static assets, neither of which may carry the token bytes).
+    console.log('--- Part E: unauthenticated routes never leak the token ---')
+    const tokenLeakCandidates = [
+      '/token', '/api/token', '/session', '/rpc', '/version', '/events',
+      '/fs/drives', '/fs/list?path=p2p-temp', '/files/download?id=hist-x', '/import', '/index.html'
+    ]
+    for (const pathname of tokenLeakCandidates) {
+      const res = await rawRequest(A.port, null, 'GET', pathname)
+      const body = res.body.toString()
+      check(`E: GET ${pathname} without token → not 200, no token bytes`,
+        res.status !== 200 && !body.includes(A.token) && /^4/.test(String(res.status)),
+        `http ${res.status} body ${body.slice(0, 60)}`)
+    }
+    const rpcNoTok = await rawRequest(A.port, null, 'POST', '/rpc', { 'Content-Type': 'application/json' }, Buffer.from(JSON.stringify({ method: 'files.createCode', id: 'e1' })))
+    check('E: POST /rpc without token → 403, no token bytes',
+      rpcNoTok.status === 403 && !rpcNoTok.body.toString().includes(A.token), `http ${rpcNoTok.status} ${rpcNoTok.body.toString().slice(0, 60)}`)
+    const impNoTok = await rawRequest(A.port, null, 'POST', '/import?name=x.bin&size=3', {}, Buffer.alloc(3))
+    check('E: POST /import without token → 403, no token bytes',
+      impNoTok.status === 403 && !impNoTok.body.toString().includes(A.token), `http ${impNoTok.status} ${impNoTok.body.toString().slice(0, 60)}`)
+    const health = await rawRequest(A.port, null, 'GET', '/health')
+    check('E: /health stays the sole unauthenticated 200', health.status === 200 && !health.body.toString().includes(A.token), `http ${health.status}`)
+    const wrong = await rawRequest(A.port, null, 'GET', `/version?t=${A.token}x`)
+    check('E: wrong ?t= on a real route → 403, no token bytes',
+      wrong.status === 403 && !wrong.body.toString().includes(A.token), `http ${wrong.status}`)
   } finally {
     await cleanup()
   }
