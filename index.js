@@ -66,7 +66,7 @@ function desktopNetworkProfile() {
 
 // ─── CLI / env config ──────────────────────────────────────────────────────
 function parseArgv(argv) {
-  const flags = { storage: null, port: null, downloads: null, dev: false }
+  const flags = { storage: null, port: null, downloads: null, dev: false, legacy: null }
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--storage') flags.storage = argv[++i]
@@ -82,6 +82,10 @@ function parseArgv(argv) {
       const next = argv[i + 1]
       flags.ui = next && !next.startsWith('--') ? argv[++i] : DEFAULT_UI_DIR
     } else if (arg.startsWith('--ui=')) flags.ui = arg.slice('--ui='.length)
+    else if (arg === '--legacy') {
+      const next = argv[i + 1]
+      flags.legacy = next && !next.startsWith('--') ? argv[++i] : null
+    } else if (arg.startsWith('--legacy=')) flags.legacy = arg.slice('--legacy='.length)
     else if (arg === '--dev') flags.dev = true
     else if (arg === '--help' || arg === '-h') {
       console.log(
@@ -116,6 +120,7 @@ function resolveConfig(flags) {
       : DEFAULT_MAX_IMPORT_BYTES,
     dev: flags.dev,
     uiDir: flags.ui ? path.resolve(flags.ui) : null,
+    legacyDir: flags.legacy ? path.resolve(flags.legacy) : (process.env.MESHDROP_HOST_LEGACY ? path.resolve(process.env.MESHDROP_HOST_LEGACY) : null),
     label: path.basename(path.resolve(storageDir)) || 'host'
   }
 }
@@ -190,6 +195,11 @@ function createHostApp(cfg) {
   if (cfg.uiDir) {
     if (fs.existsSync(path.join(cfg.uiDir, 'index.html'))) uiDir = cfg.uiDir
     else warn(`UI dir ${cfg.uiDir} has no index.html — serving API only`)
+  }
+  let legacyDir = null
+  if (cfg.legacyDir) {
+    if (fs.existsSync(path.join(cfg.legacyDir, 'index.html'))) legacyDir = cfg.legacyDir
+    else warn(`Legacy dir ${cfg.legacyDir} has no index.html — /legacy disabled`)
   }
 
   const engine = new MeshEngine({
@@ -338,7 +348,8 @@ function createHostApp(cfg) {
         getVersionInfo,
         basePort: cfg.port,
         dev: cfg.dev,
-        ui: uiDir ? { dir: uiDir } : null
+        ui: uiDir ? { dir: uiDir } : null,
+        legacy: legacyDir ? { dir: legacyDir } : null
       })
       const port = await apiServer.listen()
       apiServer.attachWebSocket()
@@ -368,7 +379,7 @@ function createHostApp(cfg) {
         identity: { ...engine.deviceIdentity, pairingCode: identity.pairingCode }
       })
       log(`API listening on http://127.0.0.1:${port} (token file: ${path.resolve(tokenPath)})`)
-      if (uiDir) log(`UI ready: http://127.0.0.1:${port}/?t=${token}`)
+      if (uiDir) log(`UI ready: http://127.0.0.1:${port}/?t=${token}${legacyDir ? ' (legacy at /legacy)' : ''}`)
       sampleDiagnostics(true)
       return { port }
     })().catch((err) => {

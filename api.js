@@ -183,7 +183,7 @@ async function serveUiAsset(uiDir, pathname) {
 // ─── Server ────────────────────────────────────────────────────────────────
 // opts: { tokenPath, storageDir, getEngine, waitEngineReady, handlers,
 //         broadcaster, getExcludedInfo, bridge, basePort, dev, log,
-//         ui: { dir } | null }
+//         ui: { dir } | null, legacy: { dir } | null }
 async function createApiServer(opts) {
   const token = loadOrCreateToken(opts.tokenPath)
   const dev = !!opts.dev
@@ -233,23 +233,42 @@ async function createApiServer(opts) {
         return json(res, 200, { ok: true }, extra)
       }
 
-      // Phase 2 UI: same-origin static page (unauthenticated by design — the
-      // session token reaches the page through the launch URL's ?t=). Only
-      // files that exist under uiDir are served; API paths fall through to
-      // the token-gated dispatch below.
-      if (opts.ui && req.method === 'GET') {
-        const hit = await serveUiAsset(opts.ui.dir, url.pathname)
-        if (hit.served) {
-          const ct = uiContentType(hit.filePath)
-          const cache = hit.isIndex ? 'no-cache' : 'public, max-age=300'
-          res.writeHead(200, {
-            'Content-Type': ct,
-            'Content-Length': hit.stat.size,
-            'Cache-Control': cache,
-            'X-Content-Type-Options': 'nosniff'
-          })
-          fs.createReadStream(hit.filePath).pipe(res)
-          return
+      // UI serving: NEW UI at / (default), legacy bundle at /legacy (one release fallback).
+      // Both are unauthenticated static assets (session rides ?t= like WS).
+      if (req.method === 'GET') {
+        // /legacy/* or /legacy → legacy dir
+        if (url.pathname === '/legacy' || url.pathname.startsWith('/legacy/')) {
+          if (opts.legacy && opts.legacy.dir) {
+            const sub = url.pathname === '/legacy' ? '/' : url.pathname.slice('/legacy'.length)
+            const hit = await serveUiAsset(opts.legacy.dir, sub)
+            if (hit.served) {
+              const ct = uiContentType(hit.filePath)
+              const cache = hit.isIndex ? 'no-cache' : 'public, max-age=300'
+              res.writeHead(200, {
+                'Content-Type': ct,
+                'Content-Length': hit.stat.size,
+                'Cache-Control': cache,
+                'X-Content-Type-Options': 'nosniff'
+              })
+              fs.createReadStream(hit.filePath).pipe(res)
+              return
+            }
+          }
+        }
+        if (opts.ui && opts.ui.dir) {
+          const hit = await serveUiAsset(opts.ui.dir, url.pathname)
+          if (hit.served) {
+            const ct = uiContentType(hit.filePath)
+            const cache = hit.isIndex ? 'no-cache' : 'public, max-age=300'
+            res.writeHead(200, {
+              'Content-Type': ct,
+              'Content-Length': hit.stat.size,
+              'Cache-Control': cache,
+              'X-Content-Type-Options': 'nosniff'
+            })
+            fs.createReadStream(hit.filePath).pipe(res)
+            return
+          }
         }
       }
 
