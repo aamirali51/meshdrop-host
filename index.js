@@ -16,17 +16,12 @@ const os = require('os')
 const path = require('path')
 
 const { MeshEngine } = require('@mesh/core')
-const protocol = require('../meshdrop-app/src/shared/protocol.js')
-const { subscribeEngineEvents } = require('../meshdrop-app/src/shared/engine-events.js')
-const { registerEngineHandlers } = require('../meshdrop-app/electron/handlers.js')
-const {
-  createStreamServer,
-  mintStreamUrl
-} = require('../meshdrop-app/src/shared/localservers/stream-server.js')
-const {
-  createSitesGateway,
-  mintSitesUrl
-} = require('../meshdrop-app/src/shared/localservers/sites-gateway.js')
+const deps = require('./deps.js')
+const protocol = require(deps.protocol)
+const { subscribeEngineEvents } = require(deps.engineEvents)
+const { registerEngineHandlers } = require(deps.handlers)
+const { createStreamServer, mintStreamUrl } = require(deps.streamServer)
+const { createSitesGateway, mintSitesUrl } = require(deps.sitesGateway)
 const { createApiServer, loadOrCreateToken, Broadcaster, DEFAULT_PORT } = require('./api.js')
 const { createBridgeHandlers, DEFAULT_MAX_IMPORT_BYTES } = require('./bridge.js')
 const { isExcluded, excludedReason } = require('./excluded.js')
@@ -93,7 +88,8 @@ function parseArgv(argv) {
           '  --storage          engine + token store (env MESHDROP_HOST_STORAGE, default ~/.meshdrop-host)\n' +
           '  --port             API port (env MESHDROP_HOST_PORT, default 41990; +1 on EADDRINUSE)\n' +
           '  --downloads        received-file folder (env MESHDROP_HOST_DOWNLOADS, default ~/Downloads)\n' +
-          `  --maxImportBytes   POST /import cap in bytes (default ${DEFAULT_MAX_IMPORT_BYTES})\n` +
+          '  --maxImportBytes   POST /import cap in bytes (0 or omitted = unlimited; set a\n' +
+          '                     ceiling only if untrusted pages hold this host\'s token)\n' +
           '  --ui [dir]         serve the built renderer UI from this same server\n' +
           '                     (default meshdrop-app/renderer/dist; disabled if missing)\n' +
           '  --dev              allow CORS from the Vite dev server (http://localhost:5173) only'

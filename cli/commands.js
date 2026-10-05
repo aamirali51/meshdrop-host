@@ -8,7 +8,8 @@
 
 const fs = require('fs')
 const path = require('path')
-const { METHODS: M } = require(path.join(__dirname, '..', '..', 'meshdrop-app', 'src', 'shared', 'protocol.js'))
+const deps = require('../deps.js')
+const { METHODS: M } = require(deps.protocol)
 
 const WEB_LINK_BASE = 'https://aamirali51.github.io/meshdrop-app/d/'
 

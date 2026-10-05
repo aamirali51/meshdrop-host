@@ -9,12 +9,27 @@
   "bin": {
     "mesh": "cli/index.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "index.js",
+    "api.js",
+    "bridge.js",
+    "excluded.js",
+    "deps.js",
+    "cli/",
+    "vendor/",
+    "README.md"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "start": "node index.js",
     "mesh": "node cli/index.js",
+    "vendor": "node scripts/sync-vendor.js",
+    "prepack": "node scripts/sync-vendor.js",
     "test": "node test-conformance.js",
     "test:cli": "node cli/test-cli.js"
   },

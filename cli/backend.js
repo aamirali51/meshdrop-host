@@ -15,9 +15,7 @@ const os = require('os')
 const path = require('path')
 const http = require('http')
 
-const APP_DIR = path.join(__dirname, '..', '..', 'meshdrop-app')
-const HANDLERS_PATH = path.join(APP_DIR, 'electron', 'handlers.js')
-const ENGINE_EVENTS_PATH = path.join(APP_DIR, 'src', 'shared', 'engine-events.js')
+const deps = require('../deps.js')
 const DEFAULT_STORE = path.join(os.homedir(), '.meshdrop-host')
 const HOST_INFO_FILE = 'host.json'
 const TOKEN_FILE = 'api-token'
@@ -201,7 +199,7 @@ function desktopNetworkProfile() {
 
 async function createEmbedded(flags) {
   const { MeshEngine } = require('@mesh/core')
-  const { registerEngineHandlers } = require(HANDLERS_PATH)
+  const { registerEngineHandlers } = require(deps.handlers)
 
   const store = resolveStore(flags)
   const downloadsDir = resolveDownloads(flags)
@@ -231,7 +229,7 @@ async function createEmbedded(flags) {
 
   await engine.start()
 
-  const { subscribeEngineEvents } = require(ENGINE_EVENTS_PATH)
+  const { subscribeEngineEvents } = require(deps.engineEvents)
 
   return {
     kind: 'embedded',

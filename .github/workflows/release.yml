@@ -1,0 +1,60 @@
+name: Release CLI
+
+# Publishes the `mesh` CLI to npm. Triggered by a `cli-v*` tag (or manually).
+# Requires a repo secret NPM_TOKEN with publish rights to the @mesh scope.
+#
+# The package is made self-contained at publish time: scripts/prepare-publish.js
+# vendors the app files the CLI borrows (from the meshdrop-app sibling) and
+# swaps the dev-only file: engine dep for the published @mesh/core semver.
+
+on:
+  push:
+    tags:
+      - 'cli-v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout host
+        uses: actions/checkout@v4
+
+      - name: Checkout engine (@mesh/core)
+        run: git clone --depth 1 https://github.com/aamirali51/meshdrop-core.git ../meshdrop-core
+
+      - name: Checkout app (shared files, for vendoring)
+        run: git clone --depth 1 https://github.com/aamirali51/meshdrop-app.git ../meshdrop-app
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Authenticate npm
+        run: npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Prepare (vendor app files + version the engine dep)
+        run: node scripts/prepare-publish.js
+
+      - name: Publish @mesh/core (skip if this version is already on npm)
+        working-directory: ../meshdrop-core
+        run: |
+          set -e
+          VER=$(node -p "require('./package.json').version")
+          if npm view "@mesh/core@$VER" version >/dev/null 2>&1; then
+            echo "@mesh/core@$VER already published — skipping"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish meshdrop-host
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
