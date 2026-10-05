@@ -6,12 +6,17 @@
   "private": true,
   "type": "commonjs",
   "main": "index.js",
+  "bin": {
+    "mesh": "cli/index.js"
+  },
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node test-conformance.js"
+    "mesh": "node cli/index.js",
+    "test": "node test-conformance.js",
+    "test:cli": "node cli/test-cli.js"
   },
   "dependencies": {
     "@mesh/core": "file:../meshdrop-core",
