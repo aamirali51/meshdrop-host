@@ -51,7 +51,22 @@ console.log('mesh CLI smoke test')
   const names = (list || []).map((c) => c.command)
   check('manifest has mesh drop', names.includes('mesh drop'))
   check('manifest has mesh ls devices', names.includes('mesh ls devices'))
+  check('manifest has mesh events', names.includes('mesh events'))
+  check('manifest has relay on/off', names.includes('mesh relay on') && names.includes('mesh relay off'))
+  check('manifest has ls invites + tunnel join', names.includes('mesh ls invites') && names.includes('mesh tunnel join'))
   check('manifest flags destructive cmds', (list.find((c) => c.command === 'mesh revoke') || {}).destructive === true)
+}
+{
+  const r = run(['list', 'devices', '--dry-run', '--json'])
+  check('list alias maps to ls', r.status === 0 && /"command":"mesh ls devices"/.test(r.stdout), r.stdout.slice(0, 140))
+}
+{
+  const r = run(['events', '--help'])
+  check('events --help exits 0', r.status === 0 && /usage: mesh events/.test(r.stdout), r.stdout.trim())
+}
+{
+  const r = run(['get', 'DROP-AAAA-BBBB', '--wait', '--dry-run', '--json'])
+  check('get --wait dry-run reports claim method', r.status === 0 && /files\.claimCode/.test(r.stdout), r.stdout.slice(0, 140))
 }
 {
   const r = run(['drop', '--help'])

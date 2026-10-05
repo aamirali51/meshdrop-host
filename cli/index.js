@@ -103,6 +103,8 @@ function helpText(topic) {
     ...rows,
     '  mesh host                Run the headless MeshDrop host (daemon)',
     '',
+    "('list' is accepted as an alias for 'ls')",
+    '',
     'global flags: --json  --yes  --dry-run  --host <url>  --token <t>  --store <dir>  --quiet',
     'env:          MESH_HOST  MESH_TOKEN  MESH_STORE  MESH_DOWNLOADS',
     '',
@@ -188,6 +190,9 @@ async function main() {
   if (flags.version || positionals[0] === 'version') return printJsonSafe(versionText(), flags)
   if (errors.length) throw usage(errors.join('\n'))
 
+  // `list` is accepted as an alias for `ls`; `ls` stays the canonical spelling.
+  if (positionals[0] === 'list') positionals[0] = 'ls'
+
   if (positionals[0] === 'help') return printJsonSafe(helpText(positionals[1]), flags)
   if (positionals[0] === 'commands') {
     if (flags.json) return printJson({ ok: true, data: manifest() })
@@ -209,6 +214,7 @@ async function main() {
   } finally {
     restoreLogs()
   }
+  if (command.stream) return // streaming commands print their own frames
   render(command, data, flags)
   process.exitCode = EXIT.OK
 }

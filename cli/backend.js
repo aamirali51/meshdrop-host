@@ -17,6 +17,7 @@ const http = require('http')
 
 const APP_DIR = path.join(__dirname, '..', '..', 'meshdrop-app')
 const HANDLERS_PATH = path.join(APP_DIR, 'electron', 'handlers.js')
+const ENGINE_EVENTS_PATH = path.join(APP_DIR, 'src', 'shared', 'engine-events.js')
 const DEFAULT_STORE = path.join(os.homedir(), '.meshdrop-host')
 const HOST_INFO_FILE = 'host.json'
 const TOKEN_FILE = 'api-token'
@@ -92,17 +93,45 @@ function rpc(url, token, method, params) {
   })
 }
 
+// Subscribe to the host's /events WebSocket. Returns an unsubscribe fn.
+function makeClientSubscribe(url, token) {
+  return (onEvent) => {
+    const { WebSocket } = require('ws')
+    const ws = new WebSocket(url.replace(/^http/, 'ws') + '/events?t=' + encodeURIComponent(token))
+    ws.on('message', (buf) => {
+      let m
+      try {
+        m = JSON.parse(buf.toString())
+      } catch {
+        return
+      }
+      if (m && m.type === 'event') onEvent(m.event, m.data)
+    })
+    ws.on('error', (err) => onEvent('__error', { message: err.message }))
+    return () => {
+      try {
+        ws.close()
+      } catch {}
+    }
+  }
+}
+
+function clientBackend(url, token) {
+  return {
+    kind: 'client',
+    target: url,
+    call: (method, params) => rpc(url, token, method, params),
+    subscribe: makeClientSubscribe(url, token),
+    stop: async () => {}
+  }
+}
+
 async function createClient(flags) {
   const explicit = flags.host || process.env.MESH_HOST
   if (explicit) {
     const token = flags.token || process.env.MESH_TOKEN
     if (!token) throw new Error('--token (or MESH_TOKEN) is required with an explicit --host')
-    return {
-      kind: 'client',
-      target: explicit,
-      call: (method, params) => rpc(explicit, token, method, params),
-      stop: async () => {}
-    }
+    return clientBackend(explicit, token)
   }
   const store = resolveStore(flags)
   const info = readHostInfo(store)
@@ -113,12 +142,7 @@ async function createClient(flags) {
         `or run this command embedded with --embedded.`
     )
   }
-  return {
-    kind: 'client',
-    target: info.url,
-    call: (method, params) => rpc(info.url, info.token, method, params),
-    stop: async () => {}
-  }
+  return clientBackend(info.url, info.token)
 }
 
 // ─── embedded backend ───────────────────────────────────────────────────────
@@ -207,6 +231,8 @@ async function createEmbedded(flags) {
 
   await engine.start()
 
+  const { subscribeEngineEvents } = require(ENGINE_EVENTS_PATH)
+
   return {
     kind: 'embedded',
     target: store,
@@ -215,6 +241,10 @@ async function createEmbedded(flags) {
       const h = handlers[method]
       if (typeof h !== 'function') throw new Error(`method not supported: ${method}`)
       return h(params)
+    },
+    subscribe: (onEvent) => {
+      subscribeEngineEvents({ engine, sink: { send: (event, data) => onEvent(event, data) } })
+      return () => {}
     },
     stop: async () => {
       try {

@@ -70,6 +70,23 @@ function presetFrom(flags) {
   return '30m'
 }
 
+const TERMINAL_STATUSES = new Set(['completed', 'complete', 'failed', 'cancelled', 'canceled'])
+
+// Poll TRANSFERS_LIST until a transfer reaches a terminal state. Used by the
+// opt-in `--wait` on send/get so a script can block on completion (with an
+// optional --timeout in seconds; 0/omitted = wait indefinitely).
+async function waitForTransfer(call, id, timeoutSec) {
+  if (!id) return null
+  const deadline = timeoutSec > 0 ? Date.now() + timeoutSec * 1000 : Infinity
+  for (;;) {
+    const list = (await call(M.TRANSFERS_LIST, {})) || []
+    const t = list.find((x) => x && (x.id === id || x.transferId === id))
+    if (t && TERMINAL_STATUSES.has(String(t.status))) return t
+    if (Date.now() >= deadline) return t || null
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+}
+
 // ─── cross-command lookups (use the same methods, so both backends work) ────
 
 async function resolveDevice(call, ref) {
@@ -261,18 +278,32 @@ const COMMANDS = [
       { label: 'PEERS', get: (r) => String(r.participantCount == null ? '' : r.participantCount) }
     ]
   },
+  {
+    path: ['ls', 'invites'],
+    summary: 'List pending sync invites',
+    usage: 'mesh ls invites [--json]',
+    method: M.SYNC_LIST_INVITES,
+    items: (d) => (Array.isArray(d) ? d : []),
+    columns: [
+      { label: 'NAME', get: (i) => i.name || '' },
+      { label: 'FROM', get: (i) => i.peerName || i.peerId || '' },
+      { label: 'ID', get: (i) => short(i.id) }
+    ]
+  },
 
   // ── send / share / receive ────────────────────────────────────────────────
   {
     path: ['send'],
     summary: 'Send files to a paired device',
-    usage: 'mesh send <path…> --to <peer> [--json]',
+    usage: 'mesh send <path…> --to <peer> [--wait [--timeout N]] [--json]',
     write: true,
+    method: M.TRANSFERS_START,
     run: async ({ call, positionals, flags }) => {
       if (!positionals.length) throw new Error("send needs at least one file: mesh send <path…> --to <peer>")
       if (!flags.to) throw new Error('--to <peer> is required (see "mesh ls peers")')
       const device = await resolveDevice(call, flags.to)
       const peerId = device.id || device.publicKey
+      const timeout = flags.timeout ? Number(flags.timeout) : 0
       const out = []
       for (const file of positionals) {
         const abs = path.resolve(file)
@@ -284,11 +315,20 @@ const COMMANDS = [
           filename: path.basename(abs),
           fileSize: st.size
         })
-        out.push({ file: abs, transfer: res })
+        const entry = { file: abs, transfer: res }
+        if (flags.wait) entry.final = await waitForTransfer(call, res && res.id, timeout)
+        out.push(entry)
       }
       return out
     },
-    human: (rows) => rows.map((r) => `queued ${path.basename(r.file)} → ${r.transfer && r.transfer.id ? r.transfer.id : 'transfer'}`).join('\n')
+    human: (rows) =>
+      rows
+        .map((r) => {
+          const id = (r.transfer && r.transfer.id) || 'transfer'
+          const status = r.final && r.final.status ? ` — ${r.final.status}` : ''
+          return `queued ${path.basename(r.file)} → ${id}${status}`
+        })
+        .join('\n')
   },
   {
     path: ['drop'],
@@ -318,16 +358,20 @@ const COMMANDS = [
   {
     path: ['get'],
     summary: 'Claim a drop code and download it',
-    usage: 'mesh get <code> [--out <dir>] [--json]',
+    usage: 'mesh get <code> [--wait [--timeout N]] [--json]',
     write: true,
-    run: async ({ call, positionals }) => {
+    method: M.FILES_CLAIM_CODE,
+    run: async ({ call, positionals, flags }) => {
       if (!positionals.length) throw new Error('get needs a code: mesh get DROP-XXXX-XXXX')
       const claim = await call(M.FILES_CLAIM_CODE, { code: positionals[0] })
+      let result = claim
       if (claim && claim.shareId) {
-        const done = await call(M.FILES_CONFIRM_CLAIM, { shareId: claim.shareId })
-        return done || claim
+        result = (await call(M.FILES_CONFIRM_CLAIM, { shareId: claim.shareId })) || claim
       }
-      return claim
+      if (flags.wait && result && result.id) {
+        result = (await waitForTransfer(call, result.id, flags.timeout ? Number(flags.timeout) : 0)) || result
+      }
+      return result
     }
   },
   {
@@ -335,6 +379,7 @@ const COMMANDS = [
     summary: 'Revoke an active drop code',
     usage: 'mesh revoke <code> [--yes] [--json]',
     write: true,
+    method: M.FILES_CANCEL_CODE,
     run: async ({ call, positionals }) => {
       const share = await resolvePending(call, positionals[0])
       return call(M.FILES_CANCEL_CODE, { id: share.id })
@@ -345,6 +390,7 @@ const COMMANDS = [
     summary: 'Extend an active drop code',
     usage: 'mesh extend <code> [--minutes N] [--json]',
     write: true,
+    method: M.FILES_EXTEND_EXPIRATION,
     run: async ({ call, positionals, flags }) => {
       const share = await resolvePending(call, positionals[0])
       return call(M.FILES_EXTEND_EXPIRATION, { id: share.id, addMinutes: flags.minutes ? Number(flags.minutes) : 30 })
@@ -357,6 +403,7 @@ const COMMANDS = [
     summary: 'Pair with a device by code',
     usage: 'mesh pair <MD-XXXX-…|DROP-…> [--json]',
     write: true,
+    method: M.DEVICES_PAIR_CODE,
     run: async ({ call, positionals }) => {
       if (!positionals.length) throw new Error('pair needs a code: mesh pair MD-XXXX-XXXX')
       return call(M.DEVICES_PAIR_CODE, { code: positionals[0] })
@@ -367,6 +414,7 @@ const COMMANDS = [
     summary: 'Remove a paired device',
     usage: 'mesh unpair <peer> [--yes] [--json]',
     write: true,
+    method: M.DEVICES_REMOVE,
     run: async ({ call, positionals }) => {
       if (!positionals.length) throw new Error('unpair needs a device: mesh unpair <name|id>')
       const device = await resolveDevice(call, positionals[0])
@@ -380,6 +428,7 @@ const COMMANDS = [
     summary: 'Sync a local folder to a device',
     usage: 'mesh sync add <path> --to <peer> [--name <label>] [--json]',
     write: true,
+    method: M.SYNC_ADD,
     run: async ({ call, positionals, flags }) => {
       if (!positionals.length) throw new Error('sync add needs a path: mesh sync add <path> --to <peer>')
       if (!flags.to) throw new Error('--to <peer> is required (see "mesh ls devices")')
@@ -446,6 +495,7 @@ const COMMANDS = [
     summary: 'Publish a folder as a shared folder',
     usage: 'mesh site publish <path> [--name <n>] [--never|--days N] [--write] [--spa] [--json]',
     write: true,
+    method: M.SITES_PUBLISH,
     run: async ({ call, positionals, flags }) => {
       if (!positionals.length) throw new Error('site publish needs a folder: mesh site publish <path>')
       return call(M.SITES_PUBLISH, {
@@ -472,6 +522,7 @@ const COMMANDS = [
     summary: 'Expose a local port behind a tunnel code',
     usage: 'mesh tunnel open --port <n> [--name <n>] [--udp] [--never|--days N] [--max N] [--json]',
     write: true,
+    method: M.TUNNEL_CREATE_CODE,
     run: async ({ call, flags }) => {
       if (!flags.port) throw new Error('--port <n> is required')
       return call(M.TUNNEL_CREATE_CODE, {
@@ -492,6 +543,14 @@ const COMMANDS = [
     method: M.TUNNEL_CANCEL_CODE,
     params: (p) => ({ code: p[0] })
   },
+  {
+    path: ['tunnel', 'join'],
+    summary: 'Join a tunnel code (expose it locally)',
+    usage: 'mesh tunnel join <code> [--json]',
+    write: true,
+    method: M.TUNNEL_JOIN_CODE,
+    params: (p) => ({ code: p[0] })
+  },
 
   // ── watch party ───────────────────────────────────────────────────────────
   {
@@ -499,6 +558,7 @@ const COMMANDS = [
     summary: 'Create a watch-party room for a video file',
     usage: 'mesh party create <file> [--name <title>] [--json]',
     write: true,
+    method: M.WATCH_PARTY_CREATE,
     run: async ({ call, positionals, flags }) => {
       if (!positionals.length) throw new Error('party create needs a video file: mesh party create <file>')
       return call(M.WATCH_PARTY_CREATE, { filePath: path.resolve(positionals[0]), title: flags.name })
@@ -527,9 +587,26 @@ const COMMANDS = [
     method: 'relay.stats'
   },
   {
+    path: ['relay', 'on'],
+    summary: 'Relay for paired devices (helps NAT-restricted peers)',
+    usage: 'mesh relay on [--json]',
+    write: true,
+    method: M.SETTINGS_UPDATE,
+    params: () => ({ relayForPairedDevices: true })
+  },
+  {
+    path: ['relay', 'off'],
+    summary: 'Stop relaying for paired devices',
+    usage: 'mesh relay off [--json]',
+    write: true,
+    method: M.SETTINGS_UPDATE,
+    params: () => ({ relayForPairedDevices: false })
+  },
+  {
     path: ['config', 'get'],
     summary: 'Show settings (or one key)',
     usage: 'mesh config get [<key>] [--json]',
+    method: M.SETTINGS_GET,
     run: async ({ call, positionals }) => {
       const settings = await call(M.SETTINGS_GET, {})
       if (positionals[0]) return { [positionals[0]]: settings ? settings[positionals[0]] : undefined }
@@ -541,6 +618,7 @@ const COMMANDS = [
     summary: 'Set a setting',
     usage: 'mesh config set <key> <value> [--json]',
     write: true,
+    method: M.SETTINGS_UPDATE,
     run: async ({ call, positionals }) => {
       const [key, value] = positionals
       if (!key || value === undefined) throw new Error('usage: mesh config set <key> <value>')
@@ -549,6 +627,40 @@ const COMMANDS = [
       else if (value === 'false') coerced = false
       else if (/^-?\d+$/.test(value)) coerced = Number(value)
       return call(M.SETTINGS_UPDATE, { [key]: coerced })
+    }
+  },
+
+  // ── observe ───────────────────────────────────────────────────────────────
+  {
+    path: ['events'],
+    summary: 'Stream live engine events until interrupted',
+    usage: 'mesh events [<filter>] [--timeout N] [--json]',
+    stream: true,
+    run: ({ backend, flags, positionals }) => {
+      const filter = (positionals[0] || '').toLowerCase()
+      const onEvent = (event, data) => {
+        if (filter && !String(event).toLowerCase().includes(filter)) return
+        if (flags.json) process.stdout.write(JSON.stringify({ event, data, at: Date.now() }) + '\n')
+        else process.stdout.write(`${event}  ${JSON.stringify(data)}\n`)
+      }
+      if (typeof backend.subscribe !== 'function') {
+        throw new Error('this backend cannot stream events')
+      }
+      const unsubscribe = backend.subscribe(onEvent)
+      const secs = flags.timeout ? Number(flags.timeout) : 0
+      // --timeout bounds the stream (handy in tests/CI): tear the subscription
+      // down or the open socket/engine would keep the process alive forever.
+      if (secs > 0) {
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            try {
+              unsubscribe()
+            } catch {}
+            resolve()
+          }, secs * 1000)
+        )
+      }
+      return new Promise(() => {})
     }
   }
 ]

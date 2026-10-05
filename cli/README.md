@@ -44,17 +44,22 @@ Env: `MESH_HOST`, `MESH_TOKEN`, `MESH_STORE`, `MESH_DOWNLOADS`.
 
 ```
 mesh status | whoami | doctor
-mesh ls devices|peers|drops|transfers|sync|sites|tunnels|rooms
-mesh send <path…> --to <peer>
+mesh ls devices|peers|drops|transfers|sync|invites|sites|tunnels|rooms
+mesh send <path…> --to <peer> [--wait [--timeout N]]
 mesh drop <path…> [--never|--days N|--hours N] [--max N] [--name <title>]
-mesh get <code> [--out <dir>]
+mesh get <code> [--wait [--timeout N]]
 mesh revoke|extend <code>
 mesh pair <code> · unpair <peer>
 mesh sync add|rm|pause|resume|run|accept|decline
-mesh site publish|rm · tunnel open|close · party create|join|leave
-mesh relay status · config get|set
+mesh site publish|rm · tunnel open|close|join · party create|join|leave
+mesh relay status|on|off · config get|set
+mesh events [<filter>] [--timeout N]
 mesh host
 mesh help | version | commands --json
 ```
+
+- `send`/`get` return as soon as they're queued; add `--wait` (optionally `--timeout` seconds) to block until the transfer reaches a terminal state.
+- `mesh events` streams live protocol events until interrupted (or for `--timeout` seconds).
+- `list` is accepted as an alias for `ls`; everything else has one canonical spelling.
 
 Run `mesh help` or `mesh <verb> --help` for usage.
