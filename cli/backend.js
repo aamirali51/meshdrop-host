@@ -180,6 +180,30 @@ function pidAlive(pid) {
   }
 }
 
+// Does `pid` still belong to a MeshDrop/Node process? Guards against pid reuse
+// (a dead host's pid taken over by an unrelated process). On doubt → true, so a
+// lock we cannot disprove is never stolen.
+function isMeshProcess(pid) {
+  const opts = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 }
+  try {
+    if (process.platform === 'win32') {
+      const out = require('child_process').execFileSync(
+        'tasklist',
+        ['/fi', `PID eq ${pid}`, '/fo', 'csv', '/nh'],
+        opts
+      )
+      return /node\.exe|MeshDrop\.exe|electron\.exe/i.test(out)
+    }
+    if (process.platform === 'linux') {
+      return /node|meshdrop/i.test(fs.readFileSync(`/proc/${pid}/comm`, 'utf8'))
+    }
+    const out = require('child_process').execFileSync('ps', ['-p', String(pid), '-o', 'comm='], opts)
+    return /node|meshdrop/i.test(out)
+  } catch {
+    return true
+  }
+}
+
 function acquireStoreLock(store) {
   fs.mkdirSync(store, { recursive: true })
   const lockPath = path.join(store, LOCK_FILE)
@@ -194,7 +218,7 @@ function acquireStoreLock(store) {
     try {
       holder = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
     } catch {}
-    if (holder && typeof holder.pid === 'number' && pidAlive(holder.pid)) {
+    if (holder && typeof holder.pid === 'number' && pidAlive(holder.pid) && isMeshProcess(holder.pid)) {
       throw new Error(
         `store ${store} is already owned by pid ${holder.pid} (a running host or another mesh command).\n` +
           `Use the running host instead (mesh --host <url> --token <token>) or pick another --store.`

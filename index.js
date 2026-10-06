@@ -144,7 +144,11 @@ function acquireStoreLock(storageDir, label) {
         holder = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
       } catch {}
       const holderPid = holder && typeof holder.pid === 'number' ? holder.pid : null
-      if (!holderPid || pidAlive(holderPid)) {
+      // Liveness = the pid exists AND still looks like a MeshDrop/Node process.
+      // A bare pid check is not enough: pids are reused, so a dead host's pid
+      // can be taken by an unrelated process (e.g. svchost), which would
+      // otherwise block this store forever.
+      if (!holderPid || (pidAlive(holderPid) && isMeshProcess(holderPid))) {
         console.error(
           `[Host:${label}] FATAL: storage dir ${storageDir} is already in use (pid ${holderPid || 'unknown'} — another MeshDrop host, or the Electron app sharing this store). ` +
             'Two engines on one identity corrupt the DHT state; pick a different --storage or stop the other process.'
@@ -166,6 +170,29 @@ function pidAlive(pid) {
     return true
   } catch (err) {
     return err.code === 'EPERM'
+  }
+}
+
+// Does `pid` still belong to a MeshDrop/Node process? Guards against pid reuse.
+// On any doubt it returns true, so a lock we cannot disprove is never stolen.
+function isMeshProcess(pid) {
+  const opts = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 }
+  try {
+    if (process.platform === 'win32') {
+      const out = require('child_process').execFileSync(
+        'tasklist',
+        ['/fi', `PID eq ${pid}`, '/fo', 'csv', '/nh'],
+        opts
+      )
+      return /node\.exe|MeshDrop\.exe|electron\.exe/i.test(out)
+    }
+    if (process.platform === 'linux') {
+      return /node|meshdrop/i.test(fs.readFileSync(`/proc/${pid}/comm`, 'utf8'))
+    }
+    const out = require('child_process').execFileSync('ps', ['-p', String(pid), '-o', 'comm='], opts)
+    return /node|meshdrop/i.test(out)
+  } catch {
+    return true
   }
 }
 
