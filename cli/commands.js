@@ -88,6 +88,32 @@ async function waitForTransfer(call, id, timeoutSec) {
   }
 }
 
+// Resolve on the next matching backend event, or null after timeoutMs. Uses the
+// backend's event stream so it works in both client and embedded modes.
+function waitForEvent(backend, eventName, predicate, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!backend || typeof backend.subscribe !== 'function') return resolve(null)
+    let settled = false
+    const finish = (val) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try {
+        unsubscribe()
+      } catch {}
+      resolve(val)
+    }
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    const unsubscribe = backend.subscribe((event, data) => {
+      if (event === eventName && (!predicate || predicate(data))) finish(data)
+    })
+  })
+}
+
+function eqCode(a, b) {
+  return String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase()
+}
+
 // ─── cross-command lookups (use the same methods, so both backends work) ────
 
 async function resolveDevice(call, ref) {
@@ -358,22 +384,64 @@ const COMMANDS = [
   },
   {
     path: ['get'],
-    summary: 'Claim a drop code and download it',
-    usage: 'mesh get <code> [--wait [--timeout N]] [--json]',
+    summary: 'Receive a drop code — claim it, then download the files',
+    usage: 'mesh get <code> [--timeout N] [--json]',
     write: true,
     method: M.FILES_CLAIM_CODE,
-    run: async ({ call, positionals, flags }) => {
+    run: async ({ call, backend, positionals, flags }) => {
       if (!positionals.length) throw new Error('get needs a code: mesh get DROP-XXXX-XXXX')
-      const claim = await call(M.FILES_CLAIM_CODE, { code: positionals[0] })
-      let result = claim
-      if (claim && claim.shareId) {
-        result = (await call(M.FILES_CONFIRM_CLAIM, { shareId: claim.shareId })) || claim
+      const code = positionals[0]
+      const waitMs = flags.timeout ? Number(flags.timeout) * 1000 : 20000
+      // Claiming only advertises interest; the sender's reply arrives as a
+      // `claim.preview_received` event carrying the shareId. Subscribe FIRST so
+      // it cannot be missed, then confirm to actually pull the files.
+      const previewPromise = waitForEvent(
+        backend,
+        'claim.preview_received',
+        (d) => !d || !d.code || eqCode(d.code, code),
+        waitMs
+      )
+      await call(M.FILES_CLAIM_CODE, { code })
+      const preview = await previewPromise
+      if (!preview) {
+        throw new Error(
+          `no sender is online for ${code} (no reply in ${Math.round(waitMs / 1000)}s) — the code may be expired or the sender offline`
+        )
       }
-      if (flags.wait && result && result.id) {
-        result = (await waitForTransfer(call, result.id, flags.timeout ? Number(flags.timeout) : 0)) || result
-      }
-      return result
+      const selectedIndices = Array.isArray(preview.files) ? preview.files.map((f) => f.index) : undefined
+      const started = await call(M.FILES_CONFIRM_CLAIM, { shareId: preview.shareId, selectedIndices })
+      const id = started && (started.id || started.transferId)
+      const download = id ? (await waitForTransfer(call, id, 0)) || started : started
+      return { code, files: preview.files, download }
     }
+  },
+  {
+    path: ['peek'],
+    summary: 'Check whether a drop code is online and list its files (no download)',
+    usage: 'mesh peek <code> [--timeout N] [--json]',
+    run: async ({ call, backend, positionals, flags }) => {
+      if (!positionals.length) throw new Error('peek needs a code: mesh peek DROP-XXXX-XXXX')
+      const code = positionals[0]
+      const waitMs = flags.timeout ? Number(flags.timeout) * 1000 : 20000
+      const previewPromise = waitForEvent(
+        backend,
+        'claim.preview_received',
+        (d) => !d || !d.code || eqCode(d.code, code),
+        waitMs
+      )
+      await call(M.FILES_CLAIM_CODE, { code })
+      const preview = await previewPromise
+      if (!preview) return { online: false, code }
+      // Do not download — withdraw the claim we just made.
+      try {
+        await call(M.FILES_CANCEL_CLAIM, { shareId: preview.shareId, code })
+      } catch {}
+      return { online: true, code, shareId: preview.shareId, expiresAt: preview.expiresAt || 0, files: preview.files }
+    },
+    human: (d) =>
+      d.online
+        ? `online    yes\ncode      ${d.code}\nfiles     ${(d.files || []).length}\nexpires   ${d.expiresAt ? new Date(d.expiresAt).toLocaleString() : 'never'}`
+        : `online    no — nobody answered for ${d.code} (expired, or the sender is offline)`
   },
   {
     path: ['revoke'],
