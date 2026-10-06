@@ -74,6 +74,60 @@ function presetFrom(flags) {
   return '30m'
 }
 
+function statusHuman(d) {
+  const id = d.identity || {}
+  const c = d.connection || {}
+  return [
+    `device     ${id.name || '(unnamed)'}`,
+    `id         ${id.deviceId || id.id || '—'}`,
+    `code       ${id.pairingCode || '—'}`,
+    `status     ${c.status || (c.connected ? 'online' : 'offline')}`,
+    `peers      ${d.peers == null ? '—' : d.peers}`,
+    `transfers  ${d.activeTransfers} active / ${d.totalTransfers} total`
+  ].join('\n')
+}
+
+// Latest published version of an npm package, or null if the registry is
+// unreachable (offline, air-gapped NAS) — `mesh update` degrades gracefully.
+function npmLatest(name) {
+  return new Promise((resolve) => {
+    const https = require('https')
+    const req = https.get(
+      `https://registry.npmjs.org/${name.replace('/', '%2f')}/latest`,
+      { timeout: 5000 },
+      (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (c) => {
+          body += c
+        })
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body).version || null)
+          } catch {
+            resolve(null)
+          }
+        })
+      }
+    )
+    req.on('error', () => resolve(null))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(null)
+    })
+  })
+}
+
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map(Number)
+  const pb = String(b).split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0)
+    if (d) return d > 0 ? 1 : -1
+  }
+  return 0
+}
+
 const TERMINAL_STATUSES = new Set(['completed', 'complete', 'failed', 'cancelled', 'canceled'])
 
 // Poll TRANSFERS_LIST until a transfer reaches a terminal state. Used by the
@@ -146,41 +200,53 @@ const COMMANDS = [
   {
     path: ['status'],
     summary: 'Show peers, connection and transfers',
-    usage: 'mesh status [--json]',
+    usage: 'mesh status [--watch [--interval N]] [--json]',
     isDefault: true,
-    run: async ({ call }) => {
-      const [identity, connection, transfers] = await Promise.all([
-        call(M.DEVICES_GET_IDENTITY, {}).catch(() => null),
-        call(M.CONNECTION_STATUS, {}).catch(() => null),
-        call(M.TRANSFERS_LIST, {}).catch(() => [])
-      ])
-      const list = Array.isArray(transfers) ? transfers : []
-      const active = list.filter((t) => t && !['completed', 'complete', 'failed', 'cancelled', 'canceled'].includes(t.status))
-      return {
-        identity: identity || null,
-        connection: connection || null,
-        peers:
-          connection && typeof connection.peerCount === 'number'
-            ? connection.peerCount
-            : connection && typeof connection.connectedPeersCount === 'number'
-              ? connection.connectedPeersCount
-              : null,
-        activeTransfers: active.length,
-        totalTransfers: list.length
+    run: async ({ call, flags }) => {
+      const collect = async () => {
+        const [identity, connection, transfers] = await Promise.all([
+          call(M.DEVICES_GET_IDENTITY, {}).catch(() => null),
+          call(M.CONNECTION_STATUS, {}).catch(() => null),
+          call(M.TRANSFERS_LIST, {}).catch(() => [])
+        ])
+        const list = Array.isArray(transfers) ? transfers : []
+        const active = list.filter(
+          (t) => t && !['completed', 'complete', 'failed', 'cancelled', 'canceled'].includes(t.status)
+        )
+        return {
+          identity: identity || null,
+          connection: connection || null,
+          peers:
+            connection && typeof connection.peerCount === 'number'
+              ? connection.peerCount
+              : connection && typeof connection.connectedPeersCount === 'number'
+                ? connection.connectedPeersCount
+                : null,
+          activeTransfers: active.length,
+          totalTransfers: list.length
+        }
       }
+      if (!flags.watch) return collect()
+      const intervalMs = (flags.interval ? Number(flags.interval) : 2) * 1000
+      const emit = (d) => {
+        if (flags.json) process.stdout.write(JSON.stringify({ ok: true, data: d }) + '\n')
+        else process.stdout.write(statusHuman(d) + '\n\n')
+      }
+      emit(await collect())
+      const deadline = flags.timeout ? Date.now() + Number(flags.timeout) * 1000 : Infinity
+      return new Promise((resolve) => {
+        const timer = setInterval(async () => {
+          try {
+            emit(await collect())
+          } catch {}
+          if (Date.now() >= deadline) {
+            clearInterval(timer)
+            resolve()
+          }
+        }, intervalMs)
+      })
     },
-    human: (d) => {
-      const id = d.identity || {}
-      const c = d.connection || {}
-      return [
-        `device     ${id.name || '(unnamed)'}`,
-        `id         ${id.deviceId || id.id || '—'}`,
-        `code       ${id.pairingCode || '—'}`,
-        `status     ${c.status || (c.connected ? 'online' : 'offline')}`,
-        `peers      ${d.peers == null ? '—' : d.peers}`,
-        `transfers  ${d.activeTransfers} active / ${d.totalTransfers} total`
-      ].join('\n')
-    }
+    human: statusHuman
   },
   {
     path: ['whoami'],
@@ -811,6 +877,104 @@ const COMMANDS = [
     usage: 'mesh service status [--system] [--json]',
     local: true,
     run: async ({ flags }) => service.status({ system: !!flags.system })
+  },
+  {
+    path: ['update'],
+    summary: 'Check npm for a newer mesh release',
+    usage: 'mesh update [--json]',
+    local: true,
+    run: async () => {
+      const current = require('../package.json').version
+      const latest = await npmLatest('@meshdrop-go/host')
+      const newer = !!latest && compareVersions(latest, current) > 0
+      return { current, latest: latest || null, upToDate: !newer, install: 'npm install -g @meshdrop-go/host' }
+    },
+    human: (d) =>
+      !d.latest
+        ? `could not reach the npm registry (installed ${d.current})`
+        : d.upToDate
+          ? `up to date (${d.current})`
+          : `update available: ${d.current} → ${d.latest}\n  ${d.install}`
+  },
+
+  // ── folder automation ─────────────────────────────────────────────────────
+  {
+    path: ['watch'],
+    summary: 'Watch a folder: auto-send new files to a peer, or publish it as a shared folder',
+    usage: 'mesh watch <dir> [--to <peer>] [--as site] [--name <n>] [--once] [--interval N] [--json]',
+    write: true,
+    run: async ({ call, positionals, flags }) => {
+      if (!positionals.length) throw new Error('watch needs a folder: mesh watch <dir> [--to <peer>] [--as site]')
+      const dir = path.resolve(positionals[0])
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`not a folder: ${positionals[0]}`)
+
+      let peerId = null
+      if (flags.to) {
+        const device = await resolveDevice(call, flags.to)
+        peerId = device.id || device.publicKey
+      }
+      const emit = (event, data) => {
+        if (flags.json) process.stdout.write(JSON.stringify({ event, data }) + '\n')
+        else process.stdout.write(`${event}  ${data === undefined ? '' : typeof data === 'string' ? data : JSON.stringify(data)}\n`)
+      }
+      if (flags.as === 'site') {
+        const published = await call(M.SITES_PUBLISH, {
+          folderPath: dir,
+          name: flags.name,
+          writeMode: flags.write ? 'read-write' : 'read-only',
+          spa: !!flags.spa,
+          expirationPreset: presetFrom(flags)
+        })
+        emit('published', published)
+      }
+
+      const listFiles = () => {
+        const out = []
+        const walk = (d) => {
+          for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+            const p = path.join(d, e.name)
+            if (e.isDirectory()) walk(p)
+            else if (e.isFile()) out.push(p)
+          }
+        }
+        walk(dir)
+        return out
+      }
+
+      const seen = new Set(listFiles())
+      emit('watching', { dir, to: flags.to || null, files: seen.size })
+
+      const scan = async () => {
+        for (const file of listFiles()) {
+          if (seen.has(file)) continue
+          seen.add(file)
+          if (peerId) {
+            const st = fs.statSync(file)
+            const res = await call(M.TRANSFERS_START, {
+              peerId,
+              filePath: file,
+              filename: path.basename(file),
+              fileSize: st.size
+            })
+            emit('sent', { file, transfer: res && res.id })
+          } else {
+            emit('new', file)
+          }
+        }
+      }
+
+      if (flags.once) {
+        await scan()
+        return { dir, files: seen.size }
+      }
+
+      const intervalMs = (flags.interval ? Number(flags.interval) : 3) * 1000
+      return new Promise(() => {
+        setInterval(() => {
+          scan().catch(() => {})
+        }, intervalMs)
+      })
+    }
   }
 ]
 

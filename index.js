@@ -60,9 +60,29 @@ function desktopNetworkProfile() {
   }
 }
 
+// `--profile server`: bigger windows + a slower, steadier request cadence for
+// always-on boxes (NAS) — the desktop profile stays the default so peers on the
+// same network negotiate identically.
+function serverNetworkProfile() {
+  return {
+    kind: 'desktop',
+    headBytes: 16 * 1024 * 1024,
+    tailBytes: 8 * 1024 * 1024,
+    lookaheadBlocks: 512,
+    syncWindowBytes: 32 * 1024 * 1024,
+    requestTimeoutMs: 2000,
+    maxConcurrentPeers: Infinity,
+    lruBytes: 256 * 1024 * 1024
+  }
+}
+
+function networkProfileFor(profile) {
+  return String(profile || '').toLowerCase() === 'server' ? serverNetworkProfile() : desktopNetworkProfile()
+}
+
 // ─── CLI / env config ──────────────────────────────────────────────────────
 function parseArgv(argv) {
-  const flags = { storage: null, port: null, downloads: null, name: null, dev: false, legacy: null }
+  const flags = { storage: null, port: null, downloads: null, name: null, bind: null, profile: null, dev: false, legacy: null }
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--storage') flags.storage = argv[++i]
@@ -73,6 +93,10 @@ function parseArgv(argv) {
     else if (arg.startsWith('--downloads=')) flags.downloads = arg.slice('--downloads='.length)
     else if (arg === '--name') flags.name = argv[++i]
     else if (arg.startsWith('--name=')) flags.name = arg.slice('--name='.length)
+    else if (arg === '--bind') flags.bind = argv[++i]
+    else if (arg.startsWith('--bind=')) flags.bind = arg.slice('--bind='.length)
+    else if (arg === '--profile') flags.profile = argv[++i]
+    else if (arg.startsWith('--profile=')) flags.profile = arg.slice('--profile='.length)
     else if (arg === '--maxImportBytes') flags.maxImportBytes = Number(argv[++i])
     else if (arg.startsWith('--maxImportBytes=')) flags.maxImportBytes = Number(arg.slice('--maxImportBytes='.length))
     else if (arg === '--ui') {
@@ -117,7 +141,8 @@ function resolveConfig(flags) {
     downloadsDir,
     deviceName: flags.name || process.env.MESHDROP_HOST_NAME || file.name || os.hostname(),
     port,
-    profile: file.profile || 'desktop',
+    profile: flags.profile || file.profile || 'desktop',
+    bind: flags.bind || process.env.MESHDROP_HOST_BIND || file.bind || '127.0.0.1',
     logPath: path.join(storageDir, 'host.log'),
     maxImportBytes: Number.isFinite(flags.maxImportBytes) && flags.maxImportBytes > 0
       ? flags.maxImportBytes
@@ -261,7 +286,7 @@ function createHostApp(cfg) {
     downloadsDir: cfg.downloadsDir,
     deviceName: cfg.deviceName,
     autoAcceptOffers: false,
-    networkProfile: desktopNetworkProfile()
+    networkProfile: networkProfileFor(cfg.profile)
   })
 
   // One broadcaster serves BOTH push sources — the shared engine-event
@@ -376,6 +401,28 @@ function createHostApp(cfg) {
     }
   }
 
+  const getMetrics = () => {
+    try {
+      const status = typeof engine.getStatus === 'function' ? engine.getStatus() || {} : {}
+      const diag = typeof engine.getDiagnostics === 'function' ? engine.getDiagnostics() || {} : {}
+      const peers = typeof engine.getPeers === 'function' ? (engine.getPeers() || []).length : 0
+      const transfers = typeof engine.listTransfers === 'function' ? engine.listTransfers() || [] : []
+      const shares = typeof engine.listPendingShares === 'function' ? engine.listPendingShares() || [] : []
+      const sites = typeof engine.listPublishedSites === 'function' ? engine.listPublishedSites() || [] : []
+      const done = new Set(['completed', 'failed', 'cancelled', 'canceled'])
+      return {
+        uptimeMs: Math.round(process.uptime() * 1000),
+        peers,
+        dhtNodes: diag.dhtNodes ?? status.dhtNodes ?? 0,
+        activeTransfers: transfers.filter((t) => t && !done.has(String(t.status))).length,
+        shares: shares.length,
+        sites: sites.length
+      }
+    } catch {
+      return {}
+    }
+  }
+
   function sampleDiagnostics(initial = false) {
     try {
       const d = engine.getDiagnostics()
@@ -400,6 +447,8 @@ function createHostApp(cfg) {
         bridge: bridgeHandlers,
         waitEngineReady: () => start(),
         getVersionInfo,
+        getMetrics,
+        bind: cfg.bind,
         basePort: cfg.port,
         dev: cfg.dev,
         ui: uiDir ? { dir: uiDir } : null,
@@ -432,7 +481,7 @@ function createHostApp(cfg) {
       broadcaster.send(protocol.EVENTS.WORKER_READY, {
         identity: { ...engine.deviceIdentity, pairingCode: identity.pairingCode }
       })
-      log(`API listening on http://127.0.0.1:${port} (token file: ${path.resolve(tokenPath)})`)
+      log(`API listening on http://${cfg.bind}:${port} (token file: ${path.resolve(tokenPath)})`)
       if (uiDir) log(`UI ready: http://127.0.0.1:${port}/?t=${token}${legacyDir ? ' (legacy at /legacy)' : ''}`)
       sampleDiagnostics(true)
       return { port }

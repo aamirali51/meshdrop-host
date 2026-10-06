@@ -59,10 +59,13 @@ function safeEqual(a, b) {
 // DNS-rebinding guard: the API binds 127.0.0.1 and answers only for Host
 // headers naming the loopback. A malicious page that makes the browser send a
 // request to http://<attacker-domain>:41990 gets a 403 instead of a response.
-function hostAllowed(hostHeader) {
+function hostAllowed(hostHeader, bind) {
   if (!hostHeader) return false
   const host = String(hostHeader).toLowerCase().split(':')[0]
-  return host === '127.0.0.1' || host === 'localhost' || host === '[::1]'
+  if (host === '127.0.0.1' || host === 'localhost' || host === '[::1]') return true
+  // An explicit --bind to a non-loopback address is an opt-in to network
+  // exposure; accept any Host and let the token be the gate.
+  return !!bind && bind !== '127.0.0.1' && bind !== 'localhost'
 }
 
 // Event broadcaster: protocol events → JSON frames on every connected WS.
@@ -223,7 +226,7 @@ async function createApiServer(opts) {
   const server = http.createServer(async (req, res) => {
     const label = opts.getLabel()
     try {
-      if (!hostAllowed(req.headers.host)) {
+      if (!hostAllowed(req.headers.host, opts.bind)) {
         json(res, 403, { error: 'forbidden' })
         return
       }
@@ -233,6 +236,28 @@ async function createApiServer(opts) {
       if (url.pathname === '/health') {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' }, extra)
         return json(res, 200, { ok: true }, extra)
+      }
+
+      // Prometheus text metrics — unauthenticated like /health (loopback by
+      // default). Point a scraper at http://<host>:<port>/metrics.
+      if (url.pathname === '/metrics') {
+        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' }, extra)
+        const m = typeof opts.getMetrics === 'function' ? opts.getMetrics() || {} : {}
+        const gauge = (name, help, value) =>
+          `# HELP ${name} ${help}\n# TYPE ${name} gauge\n${name} ${Number(value) || 0}\n`
+        const body =
+          gauge('meshdrop_up', 'Host is running (1) or not (0)', 1) +
+          gauge('meshdrop_uptime_seconds', 'Process uptime in seconds', Math.round((m.uptimeMs || 0) / 1000)) +
+          gauge('meshdrop_peers', 'Connected peers', m.peers) +
+          gauge('meshdrop_dht_nodes', 'Connected DHT nodes', m.dhtNodes) +
+          gauge('meshdrop_active_transfers', 'Active transfers', m.activeTransfers) +
+          gauge('meshdrop_shares', 'Active drop codes', m.shares) +
+          gauge('meshdrop_sites', 'Published shared folders', m.sites)
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+          'Content-Length': Buffer.byteLength(body)
+        })
+        return res.end(body)
       }
 
       // UI serving: NEW UI at / (default), legacy bundle at /legacy (one release fallback).
@@ -361,7 +386,7 @@ async function createApiServer(opts) {
       try {
         await new Promise((resolve, reject) => {
           server.once('error', reject)
-          server.listen(port, '127.0.0.1', () => {
+          server.listen(port, opts.bind || '127.0.0.1', () => {
             server.removeListener('error', reject)
             resolve()
           })
