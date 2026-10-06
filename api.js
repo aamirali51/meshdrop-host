@@ -23,7 +23,8 @@ const path = require('path')
 const crypto = require('crypto')
 const { WebSocketServer } = require('ws')
 
-const { createResponse, createEvent } = require('../meshdrop-app/src/shared/protocol.js')
+const deps = require('./deps.js')
+const { createResponse, createEvent } = require(deps.protocol)
 const { excludedReason } = require('./excluded.js')
 
 const API_VERSION = 1
@@ -140,6 +141,7 @@ const UI_MIME = {
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.map': 'application/json',
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
