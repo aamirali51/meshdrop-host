@@ -8,12 +8,13 @@
 // Flags that consume the next argument as their value.
 const VALUE_FLAGS = new Set([
   'host', 'token', 'store', 'days', 'hours', 'minutes', 'max', 'port',
-  'name', 'to', 'out', 'timeout'
+  'name', 'to', 'out', 'timeout', 'downloads', 'lines'
 ])
 // Flags that are presence-only booleans.
 const BOOL_FLAGS = new Set([
   'json', 'yes', 'quiet', 'help', 'version', 'dry-run',
-  'online', 'active', 'all', 'never', 'write', 'udp', 'spa', 'wait'
+  'online', 'active', 'all', 'never', 'write', 'udp', 'spa', 'wait',
+  'system', 'follow'
 ])
 
 function parse(argv, extra = {}) {

@@ -1,0 +1,24 @@
+---
+# MeshDrop host for NAS / servers.
+#
+# `network_mode: host` is REQUIRED: Docker's default bridge network hides the
+# real LAN address, which breaks local peer discovery and degrades P2P transfer
+# speed (same constraint Syncthing documents).
+services:
+  meshdrop:
+    image: ghcr.io/aamirali51/meshdrop-host:latest
+    # build: .                       # uncomment to build locally instead
+    container_name: meshdrop
+    hostname: meshdrop
+    network_mode: host
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - MESHDROP_HOST_PORT=41990
+      - MESHDROP_HOST_NAME=nas
+      - TZ=UTC
+    volumes:
+      - ./meshdrop-data:/data             # identity + config + logs — BACK THIS UP
+      - ./meshdrop-downloads:/downloads   # received files
+      # - /volume1/share:/share:ro        # optional: folders to publish/send
+    restart: unless-stopped

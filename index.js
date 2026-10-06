@@ -25,6 +25,7 @@ const { createSitesGateway, mintSitesUrl } = require(deps.sitesGateway)
 const { createApiServer, loadOrCreateToken, Broadcaster, DEFAULT_PORT } = require('./api.js')
 const { createBridgeHandlers, DEFAULT_MAX_IMPORT_BYTES } = require('./bridge.js')
 const { isExcluded, excludedReason } = require('./excluded.js')
+const { readConfig } = require('./config.js')
 
 const API_VERSION = 1
 const ENGINE_VERSION = require('@meshdrop-go/core/package.json').version
@@ -61,7 +62,7 @@ function desktopNetworkProfile() {
 
 // ─── CLI / env config ──────────────────────────────────────────────────────
 function parseArgv(argv) {
-  const flags = { storage: null, port: null, downloads: null, dev: false, legacy: null }
+  const flags = { storage: null, port: null, downloads: null, name: null, dev: false, legacy: null }
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--storage') flags.storage = argv[++i]
@@ -70,6 +71,8 @@ function parseArgv(argv) {
     else if (arg.startsWith('--port=')) flags.port = Number(arg.slice('--port='.length))
     else if (arg === '--downloads') flags.downloads = argv[++i]
     else if (arg.startsWith('--downloads=')) flags.downloads = arg.slice('--downloads='.length)
+    else if (arg === '--name') flags.name = argv[++i]
+    else if (arg.startsWith('--name=')) flags.name = arg.slice('--name='.length)
     else if (arg === '--maxImportBytes') flags.maxImportBytes = Number(argv[++i])
     else if (arg.startsWith('--maxImportBytes=')) flags.maxImportBytes = Number(arg.slice('--maxImportBytes='.length))
     else if (arg === '--ui') {
@@ -101,24 +104,52 @@ function parseArgv(argv) {
 }
 
 function resolveConfig(flags) {
-  const storageDir =
+  const storageDir = path.resolve(
     flags.storage || process.env.MESHDROP_HOST_STORAGE || path.join(os.homedir(), '.meshdrop-host')
+  )
+  // The daemon config file lives inside the store; flags + env override it.
+  const file = readConfig(storageDir)
   const downloadsDir =
-    flags.downloads || process.env.MESHDROP_HOST_DOWNLOADS || path.join(os.homedir(), 'Downloads')
-  const port = flags.port || Number(process.env.MESHDROP_HOST_PORT) || DEFAULT_PORT
+    flags.downloads || process.env.MESHDROP_HOST_DOWNLOADS || file.downloads || path.join(os.homedir(), 'Downloads')
+  const port = flags.port || Number(process.env.MESHDROP_HOST_PORT) || file.port || DEFAULT_PORT
   return {
-    storageDir: path.resolve(storageDir),
+    storageDir,
     downloadsDir,
-    deviceName: os.hostname(),
+    deviceName: flags.name || process.env.MESHDROP_HOST_NAME || file.name || os.hostname(),
     port,
+    profile: file.profile || 'desktop',
+    logPath: path.join(storageDir, 'host.log'),
     maxImportBytes: Number.isFinite(flags.maxImportBytes) && flags.maxImportBytes > 0
       ? flags.maxImportBytes
       : DEFAULT_MAX_IMPORT_BYTES,
     dev: flags.dev,
     uiDir: flags.ui ? path.resolve(flags.ui) : null,
     legacyDir: flags.legacy ? path.resolve(flags.legacy) : (process.env.MESHDROP_HOST_LEGACY ? path.resolve(process.env.MESHDROP_HOST_LEGACY) : null),
-    label: path.basename(path.resolve(storageDir)) || 'host'
+    label: path.basename(storageDir) || 'host'
   }
+}
+
+// Append everything the daemon prints to <storage>/host.log so `mesh logs` can
+// tail it — a supervised service's stdout usually goes to journald/nothing.
+function installConsoleTee(logPath) {
+  let stream
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    stream = fs.createWriteStream(logPath, { flags: 'a' })
+  } catch {
+    return
+  }
+  const util = require('util')
+  const wrap = (orig) => (...args) => {
+    orig.apply(console, args)
+    try {
+      const line = args.map((a) => (typeof a === 'string' ? a : util.inspect(a))).join(' ')
+      stream.write(`${new Date().toISOString()} ${line}\n`)
+    } catch {}
+  }
+  console.log = wrap(console.log)
+  console.error = wrap(console.error)
+  console.warn = wrap(console.warn)
 }
 
 // ─── Single-instance lock ──────────────────────────────────────────────────
@@ -464,6 +495,7 @@ async function main() {
   }
 
   const cfg = resolveConfig(parseArgv(process.argv))
+  installConsoleTee(cfg.logPath)
   console.log(
     `[Host:${cfg.label}] MeshDrop host booting — storage ${cfg.storageDir}, downloads ${cfg.downloadsDir}, device "${cfg.deviceName}"`
   )

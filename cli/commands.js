@@ -10,6 +10,9 @@ const fs = require('fs')
 const path = require('path')
 const deps = require('../deps.js')
 const { METHODS: M } = require(deps.protocol)
+const service = require('./service.js')
+const { resolveStore } = require('./backend.js')
+const { writeConfig } = require('../config.js')
 
 const WEB_LINK_BASE = 'https://aamirali51.github.io/meshdrop-app/d/'
 
@@ -731,6 +734,83 @@ const COMMANDS = [
       }
       return new Promise(() => {})
     }
+  },
+
+  // ── daemon ops (config file, logs, service) ───────────────────────────────
+  {
+    path: ['logs'],
+    summary: 'Show the host log (<store>/host.log)',
+    usage: 'mesh logs [--lines N] [--follow] [--json]',
+    local: true,
+    run: async ({ flags }) => {
+      const file = path.join(resolveStore(flags), 'host.log')
+      const n = flags.lines ? Number(flags.lines) : 50
+      const all = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
+      const initial = all.slice(-n)
+      if (!flags.follow) return { file, lines: initial }
+      for (const line of initial) {
+        process.stdout.write(flags.json ? JSON.stringify({ line }) + '\n' : line + '\n')
+      }
+      let size = fs.existsSync(file) ? fs.statSync(file).size : 0
+      return new Promise(() => {
+        setInterval(() => {
+          try {
+            const st = fs.statSync(file)
+            if (st.size < size) size = st.size
+            if (st.size > size) {
+              const fd = fs.openSync(file, 'r')
+              const buf = Buffer.alloc(st.size - size)
+              fs.readSync(fd, buf, 0, buf.length, size)
+              fs.closeSync(fd)
+              size = st.size
+              for (const line of buf.toString('utf8').split('\n').filter(Boolean)) {
+                process.stdout.write(flags.json ? JSON.stringify({ line }) + '\n' : line + '\n')
+              }
+            }
+          } catch {}
+        }, 500)
+      })
+    },
+    human: (d) => (d.lines.length ? d.lines.join('\n') : `(no log yet at ${d.file})`)
+  },
+  {
+    path: ['service', 'install'],
+    summary: 'Install the host as a start-on-boot service (systemd / launchd / Windows task)',
+    usage: 'mesh service install [--system] [--name <n>] [--port <n>] [--downloads <dir>] [--dry-run] [--json]',
+    write: true,
+    local: true,
+    dry: (p, flags) => {
+      const store = resolveStore(flags)
+      return { dryRun: true, platform: process.platform, storage: store, unit: service.renderUnit(store) }
+    },
+    run: async ({ flags }) => {
+      const store = resolveStore(flags)
+      const patch = {}
+      if (flags.name) patch.name = flags.name
+      if (flags.port) patch.port = Number(flags.port)
+      if (flags.downloads) patch.downloads = flags.downloads
+      if (Object.keys(patch).length) writeConfig(store, patch)
+      return service.install({ storage: store, system: !!flags.system })
+    },
+    human: (d) =>
+      d.dryRun
+        ? `dry run — would install on ${d.platform} (store ${d.storage}):\n\n${d.unit}`
+        : `service installed${d.file ? ` (${d.file})` : ''}${d.hint ? ` — ${d.hint}` : ''}`
+  },
+  {
+    path: ['service', 'uninstall'],
+    summary: 'Stop and remove the host service',
+    usage: 'mesh service uninstall [--system] [--yes] [--json]',
+    write: true,
+    local: true,
+    run: async ({ flags }) => service.uninstall({ system: !!flags.system })
+  },
+  {
+    path: ['service', 'status'],
+    summary: 'Show whether the host service is installed and running',
+    usage: 'mesh service status [--system] [--json]',
+    local: true,
+    run: async ({ flags }) => service.status({ system: !!flags.system })
   }
 ]
 

@@ -29,7 +29,7 @@ const usage = (msg) => new CliError(msg, EXIT.USAGE)
 
 // Commands that mutate/remove state and therefore require an explicit --yes
 // when not a --dry-run (never destructive by default).
-const DESTRUCTIVE = new Set(['revoke', 'unpair', 'sync rm', 'site rm', 'tunnel close'])
+const DESTRUCTIVE = new Set(['revoke', 'unpair', 'sync rm', 'site rm', 'tunnel close', 'service uninstall'])
 
 // ─── output ─────────────────────────────────────────────────────────────────
 
@@ -156,6 +156,12 @@ async function runCommand(command, positionalArgs, flags) {
     if (typeof command.dry === 'function') return command.dry(positionalArgs, flags)
     const params = command.params ? command.params(positionalArgs, flags) : {}
     return { dryRun: true, command: `mesh ${label}`, method: command.method || null, args: positionalArgs, params }
+  }
+
+  // Local commands (logs / service) never touch the engine.
+  if (command.local) {
+    if (typeof command.run === 'function') return command.run({ positionals: positionalArgs, flags })
+    throw new CliError(`command '${label}' has no implementation`, EXIT.ERROR)
   }
 
   const backend = await openBackend(flags)
