@@ -43,6 +43,32 @@ function readHostInfo(store) {
   }
 }
 
+// GET /health (the only unauthenticated route) with a short timeout. A stale
+// host.json left behind by a stopped daemon must not send us into client mode.
+function probeHost(info, timeoutMs = 700) {
+  return new Promise((resolve) => {
+    let u
+    try {
+      u = new URL('/health', info.url)
+    } catch {
+      return resolve(false)
+    }
+    const req = http.request(
+      { hostname: u.hostname, port: u.port || 80, path: u.pathname, method: 'GET', timeout: timeoutMs },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode >= 200 && res.statusCode < 300)
+      }
+    )
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+    req.end()
+  })
+}
+
 function rpc(url, token, method, params) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ method, params: params || {} })
@@ -261,7 +287,12 @@ async function createEmbedded(flags) {
 async function openBackend(flags) {
   if (flags.host || process.env.MESH_HOST) return createClient(flags)
   const store = resolveStore(flags)
-  if (readHostInfo(store) && !flags.embedded) return createClient(flags)
+  if (!flags.embedded) {
+    const info = readHostInfo(store)
+    // Only talk to a daemon that is actually answering. A stale host.json from
+    // a stopped/crashed host falls through to a one-shot embedded run instead.
+    if (info && (await probeHost(info))) return createClient(flags)
+  }
   return createEmbedded(flags)
 }
 

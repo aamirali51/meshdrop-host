@@ -1,6 +1,6 @@
 {
   "name": "@meshdrop-go/host",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless MeshDrop node: boots MeshEngine (@meshdrop-go/core) without Electron and exposes the exact app protocol contract over a token-authed localhost HTTP + WebSocket API.",
   "license": "MIT",
   "private": true,
