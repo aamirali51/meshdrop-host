@@ -1,0 +1,4 @@
+# Shell scripts and the Dockerfile must be LF even on Windows checkouts, or the
+# image fails with "/bin/sh^M: bad interpreter".
+*.sh text eol=lf
+Dockerfile text eol=lf
