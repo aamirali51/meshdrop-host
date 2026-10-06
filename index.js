@@ -1,6 +1,6 @@
 'use strict'
 
-// MeshDrop standalone host — boots the real MeshEngine (@mesh/core) with NO
+// MeshDrop standalone host — boots the real MeshEngine (@meshdrop-go/core) with NO
 // Electron and exposes the exact app protocol (src/shared/protocol.js) over a
 // token-authed localhost HTTP + WebSocket API (api.js).
 //
@@ -15,7 +15,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const { MeshEngine } = require('@mesh/core')
+const { MeshEngine } = require('@meshdrop-go/core')
 const deps = require('./deps.js')
 const protocol = require(deps.protocol)
 const { subscribeEngineEvents } = require(deps.engineEvents)
@@ -27,7 +27,7 @@ const { createBridgeHandlers, DEFAULT_MAX_IMPORT_BYTES } = require('./bridge.js'
 const { isExcluded, excludedReason } = require('./excluded.js')
 
 const API_VERSION = 1
-const ENGINE_VERSION = require('@mesh/core/package.json').version
+const ENGINE_VERSION = require('@meshdrop-go/core/package.json').version
 const LOCK_FILE = 'host.lock'
 const TOKEN_FILE = 'api-token'
 const HOST_INFO_FILE = 'host.json'

@@ -1,7 +1,7 @@
 {
-  "name": "meshdrop-host",
+  "name": "@meshdrop-go/host",
   "version": "0.1.0",
-  "description": "Headless MeshDrop node: boots MeshEngine (@mesh/core) without Electron and exposes the exact app protocol contract over a token-authed localhost HTTP + WebSocket API.",
+  "description": "Headless MeshDrop node: boots MeshEngine (@meshdrop-go/core) without Electron and exposes the exact app protocol contract over a token-authed localhost HTTP + WebSocket API.",
   "license": "MIT",
   "private": true,
   "type": "commonjs",
@@ -34,7 +34,7 @@
     "test:cli": "node cli/test-cli.js"
   },
   "dependencies": {
-    "@mesh/core": "file:../meshdrop-core",
+    "@meshdrop-go/core": "file:../meshdrop-core",
     "ws": "^8.18.0"
   }
 }

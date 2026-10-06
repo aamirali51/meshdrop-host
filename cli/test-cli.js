@@ -30,7 +30,7 @@ console.log('mesh CLI smoke test')
 {
   const r = run(['version'])
   check('version exits 0', r.status === 0, `status ${r.status}`)
-  check('version names host + core', /meshdrop-host/.test(r.stdout) && /@mesh\/core/.test(r.stdout), r.stdout.trim())
+  check('version names host + core', /@meshdrop-go\/host/.test(r.stdout) && /@meshdrop-go\/core/.test(r.stdout), r.stdout.trim())
 }
 {
   const r = run(['help'])

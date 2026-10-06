@@ -5,7 +5,7 @@
 //   client   — POST { method, params } to a running meshdrop-host over its
 //              token-authed loopback /rpc. Fast, and the only safe option when a
 //              daemon already owns the store.
-//   embedded — boot @mesh/core in-process with the exact same handler table the
+//   embedded — boot @meshdrop-go/core in-process with the exact same handler table the
 //              desktop app and host use, run, then stop. For one-shot commands
 //              with no daemon running. Takes the same exclusive store lock the
 //              host does, so two engines never share one identity.
@@ -198,7 +198,7 @@ function desktopNetworkProfile() {
 }
 
 async function createEmbedded(flags) {
-  const { MeshEngine } = require('@mesh/core')
+  const { MeshEngine } = require('@meshdrop-go/core')
   const { registerEngineHandlers } = require(deps.handlers)
 
   const store = resolveStore(flags)

@@ -127,9 +127,9 @@ function versionText() {
   const host = require(path.join(HOST_DIR, 'package.json')).version
   let core = '?'
   try {
-    core = require('@mesh/core/package.json').version
+    core = require('@meshdrop-go/core/package.json').version
   } catch {}
-  return `mesh (meshdrop-host ${host}, @mesh/core ${core})`
+  return `mesh (@meshdrop-go/host ${host}, @meshdrop-go/core ${core})`
 }
 
 // ─── dispatch ───────────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ name: Release CLI
 #
 # The package is made self-contained at publish time: scripts/prepare-publish.js
 # vendors the app files the CLI borrows (from the meshdrop-app sibling) and
-# swaps the dev-only file: engine dep for the published @mesh/core semver.
+# swaps the dev-only file: engine dep for the published @meshdrop-go/core semver.
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout host
         uses: actions/checkout@v4
 
-      - name: Checkout engine (@mesh/core)
+      - name: Checkout engine (@meshdrop-go/core)
         run: git clone --depth 1 https://github.com/aamirali51/meshdrop-core.git ../meshdrop-core
 
       - name: Checkout app (shared files, for vendoring)
@@ -41,13 +41,13 @@ jobs:
       - name: Prepare (vendor app files + version the engine dep)
         run: node scripts/prepare-publish.js
 
-      - name: Publish @mesh/core (skip if this version is already on npm)
+      - name: Publish @meshdrop-go/core (skip if this version is already on npm)
         working-directory: ../meshdrop-core
         run: |
           set -e
           VER=$(node -p "require('./package.json').version")
-          if npm view "@mesh/core@$VER" version >/dev/null 2>&1; then
-            echo "@mesh/core@$VER already published — skipping"
+          if npm view "@meshdrop-go/core@$VER" version >/dev/null 2>&1; then
+            echo "@meshdrop-go/core@$VER already published — skipping"
           else
             npm publish --access public
           fi

@@ -18,9 +18,9 @@ const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
 
 delete pkg.private
 pkg.dependencies = pkg.dependencies || {}
-pkg.dependencies['@mesh/core'] = '^' + coreVersion
+pkg.dependencies['@meshdrop-go/core'] = '^' + coreVersion
 
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-process.stdout.write(`@mesh/core -> ^${coreVersion}; private removed\n`)
+process.stdout.write(`@meshdrop-go/core -> ^${coreVersion}; private removed\n`)
 
 require('./sync-vendor.js')
