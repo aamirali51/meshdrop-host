@@ -23,4 +23,5 @@ pkg.dependencies['@meshdrop-go/core'] = '^' + coreVersion
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
 process.stdout.write(`@meshdrop-go/core -> ^${coreVersion}; private removed\n`)
 
-require('./sync-vendor.js')
+// vendor/ is committed so the package builds without the meshdrop-app sibling.
+// Refresh it with `node scripts/sync-vendor.js` whenever those app files change.

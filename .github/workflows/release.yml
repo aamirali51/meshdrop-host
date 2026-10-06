@@ -3,9 +3,9 @@ name: Release CLI
 # Publishes the `mesh` CLI to npm. Triggered by a `cli-v*` tag (or manually).
 # Requires a repo secret NPM_TOKEN with publish rights to the @mesh scope.
 #
-# The package is made self-contained at publish time: scripts/prepare-publish.js
-# vendors the app files the CLI borrows (from the meshdrop-app sibling) and
-# swaps the dev-only file: engine dep for the published @meshdrop-go/core semver.
+# The package is self-contained: the app files the CLI borrows are committed
+# under vendor/. scripts/prepare-publish.js swaps the dev-only file: engine dep
+# for the published @meshdrop-go/core semver before publishing.
 
 on:
   push:
@@ -23,9 +23,6 @@ jobs:
 
       - name: Checkout engine (@meshdrop-go/core)
         run: git clone --depth 1 https://github.com/aamirali51/meshdrop-core.git ../meshdrop-core
-
-      - name: Checkout app (shared files, for vendoring)
-        run: git clone --depth 1 https://github.com/aamirali51/meshdrop-app.git ../meshdrop-app
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
